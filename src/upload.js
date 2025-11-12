@@ -1,6 +1,6 @@
 import multer from 'multer';
 import admin from 'firebase-admin';
-import { uploadImageToImageBB } from './imagebb.js';
+import { uploadImageToImageBB, uploadImageLocally } from './imagebb.js';
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -67,12 +67,27 @@ export const handleImageUpload = async (req, res) => {
         
         const folder = req.body.folder || 'images';
         
-        const imageUrl = await uploadImageToImageBB(
-            req.file.buffer,
-            req.file.originalname,
-            req.file.mimetype,
-            folder
-        );
+        // Use local storage for localhost, ImageBB for production
+        let imageUrl;
+        if (process.env.IMAGEBB_API_KEY) {
+            imageUrl = await uploadImageToImageBB(
+                req.file.buffer,
+                req.file.originalname,
+                req.file.mimetype,
+                folder
+            );
+        } else {
+            // Use local storage for development
+            imageUrl = await uploadImageLocally(
+                req.file.buffer,
+                req.file.originalname,
+                folder
+            );
+        }
+        
+        if (!imageUrl) {
+            throw new Error('Failed to upload image - no URL returned');
+        }
         
         // Save image metadata to MongoDB if portfolioAPI is available
         if (req.portfolioAPI) {
@@ -107,24 +122,35 @@ export const handleMultipleImagesUpload = async (req, res) => {
             return res.status(400).json({ error: 'No files uploaded' });
         }
         
-        const folder = 'images';
+        const folder = req.body.folder || 'images';
         
         // Upload all images in parallel
-        const uploadPromises = req.files.map(file => 
-            uploadImageToImageBB(
-                file.buffer,
-                file.originalname,
-                file.mimetype,
-                folder
-            )
-        );
+        const uploadPromises = req.files.map(file => {
+            if (process.env.IMAGEBB_API_KEY) {
+                return uploadImageToImageBB(
+                    file.buffer,
+                    file.originalname,
+                    file.mimetype,
+                    folder
+                );
+            } else {
+                return uploadImageLocally(
+                    file.buffer,
+                    file.originalname,
+                    folder
+                );
+            }
+        });
         
         const imageUrls = await Promise.all(uploadPromises);
         
+        // Filter out empty URLs
+        const validUrls = imageUrls.filter(url => url && url !== '');
+        
         res.json({
             success: true,
-            imageUrls: imageUrls,
-            count: imageUrls.length,
+            imageUrls: validUrls,
+            count: validUrls.length,
             message: 'Images uploaded successfully'
         });
         
